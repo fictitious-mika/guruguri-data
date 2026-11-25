@@ -1,0 +1,67 @@
+# ぐるり散歩 用の地図データ（区画ファイル）を作って、GitHub Pages に公開する
+#  ・手動: Actions タブ → 「Build tiles」→ Run workflow（範囲を選べます）
+#  ・自動: 毎月1日に、関東全域を作り直します
+name: Build tiles
+
+on:
+  workflow_dispatch:
+    inputs:
+      area:
+        description: 作る範囲（まず test で試し、うまくいったら kanto）
+        type: choice
+        options: [test, kanto]
+        default: test
+  schedule:
+    - cron: '0 18 1 * *'     # 毎月1日 18:00 UTC（日本時間の2日 3:00）
+
+permissions:
+  contents: read             # このリポジトリの中身を読むだけ
+  pages: write               # GitHub Pages に公開する
+  id-token: write            # Pages への公開に必要（公式の仕組み）
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      AREA: ${{ github.event.inputs.area || 'kanto' }}      # 自動実行(月1回)のときは kanto
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: osmium-tool を入れる（OpenStreetMap の公式系ツール）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y osmium-tool
+          osmium --version
+
+      - name: 日本全域の地図データをダウンロード（Geofabrik）
+        run: |
+          curl -L --fail --retry 3 --retry-delay 20 -o japan-latest.osm.pbf \
+            https://download.geofabrik.de/asia/japan-latest.osm.pbf
+          ls -lh japan-latest.osm.pbf
+
+      - name: 区画データを作る
+        run: python3 tools/build_tiles.py --area "$AREA" --pbf japan-latest.osm.pbf --out site --work work
+
+      - name: 作ったデータの大きさ
+        run: |
+          du -sh site
+          find site -type f | wc -l
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
